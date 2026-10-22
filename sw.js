@@ -1,4 +1,4 @@
-const CACHE = 'parking-v1';
+const CACHE = 'parking-v2';
 const FILES = ['./', './index.html', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
@@ -12,7 +12,14 @@ self.addEventListener('activate', e => {
   self.clients.claim();
 });
 
+// 네트워크 우선: 연결되면 항상 최신 파일을 쓰고, 오프라인일 때만 캐시를 사용
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+  e.respondWith(
+    fetch(e.request).then(res => {
+      const copy = res.clone();
+      caches.open(CACHE).then(c => c.put(e.request, copy));
+      return res;
+    }).catch(() => caches.match(e.request))
+  );
 });
