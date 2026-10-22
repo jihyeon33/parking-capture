@@ -1,0 +1,11 @@
+{
+  "name": "내 차 어디? - 주차 위치 기억",
+  "short_name": "내 차 어디?",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f2f4f8",
+  "theme_color": "#1f6feb",
+  "icons": [
+    {"src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
+  ]
+}

@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f6feb">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>내 차 어디? - 주차 위치 기억</title>
+<style>
+:root{--pri:#1f6feb;--bg:#f2f4f8;--ink:#17202b;--mute:#6b7685;--line:#e3e7ee}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Malgun Gothic",sans-serif;background:var(--bg);color:var(--ink);padding-bottom:env(safe-area-inset-bottom)}
+.wrap{max-width:480px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:6px 0 14px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.big{display:block;width:100%;padding:18px;border:0;border-radius:14px;background:var(--pri);color:#fff;font-size:18px;font-weight:700;cursor:pointer}
+.big.alt{background:#fff;color:var(--pri);border:2px solid var(--pri)}
+button{font:inherit}
+label{display:block;font-size:12px;color:var(--mute);margin:12px 0 4px}
+input[type=text]{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:16px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chips button{padding:8px 12px;border:1px solid var(--line);background:#fff;border-radius:20px;cursor:pointer}
+.chips button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+.photo{width:100%;border-radius:12px;display:block;margin-bottom:10px;max-height:340px;object-fit:cover}
+.where{font-size:28px;font-weight:800;margin:4px 0}
+.sub{color:var(--mute);font-size:14px}
+.row{display:flex;gap:8px;margin-top:12px}
+.row button,.row a{flex:1;text-align:center;padding:12px;border-radius:10px;border:1px solid var(--line);background:#fff;text-decoration:none;color:var(--ink);cursor:pointer;font-size:15px}
+.row .danger{color:#c33}
+.hist{display:flex;gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:14px}
+.hist img{width:52px;height:52px;border-radius:8px;object-fit:cover;background:#ddd}
+.hist .t{flex:1}
+.note{font-size:12px;color:var(--mute);text-align:center;margin-top:18px;line-height:1.6}
+.hide{display:none}
+#toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;transition:.3s;pointer-events:none}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚗 내 차 어디?</h1>
+
+  <!-- 현재 주차 중 -->
+  <div id="current" class="card hide"></div>
+
+  <!-- 저장 화면 -->
+  <div id="saveBox" class="card">
+    <b>주차 위치 저장</b>
+    <label>사진 (선택)</label>
+    <input type="file" id="file" accept="image/*" capture="environment" class="hide">
+    <button class="big alt" id="photoBtn" onclick="file.click()">📷 기둥·구역 사진 찍기</button>
+    <img id="preview" class="photo hide" style="margin-top:10px">
+    <label>층</label>
+    <div class="chips" id="floors"></div>
+    <label>구역·기둥 번호</label>
+    <input type="text" id="zone" placeholder="예: B2 C-14, 엘리베이터 옆">
+    <label><input type="checkbox" id="useGps" checked> 현재 GPS 위치도 저장 (지상 주차장에서 유용)</label>
+    <br>
+    <button class="big" onclick="save()">여기에 주차했어요</button>
+  </div>
+
+  <div id="histBox" class="card hide"><b>최근 기록</b><div id="hist"></div></div>
+
+  <div class="note">데이터는 이 기기에만 저장됩니다.<br>최근 5건까지 보관하고 오래된 사진은 자동으로 지워집니다.<br>
+  <span id="installTip">홈 화면에 추가하면 앱처럼 쓸 수 있어요.</span></div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id), MAX=5;
+const FLOORS=['지상','B1','B2','B3','B4','1F','2F','3F','4F','옥상'];
+let floor='', photo='';
+
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200)}
+function load(){try{return JSON.parse(localStorage.getItem('parking')||'[]')}catch(e){return[]}}
+function store(list){
+  // 용량 초과 시 오래된 기록부터 줄여서 저장
+  while(list.length){
+    try{localStorage.setItem('parking',JSON.stringify(list));return true}catch(e){list.pop()}
+  }
+  localStorage.removeItem('parking');return false;
+}
+const esc=s=>(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function drawFloors(){
+  $('floors').innerHTML=FLOORS.map(f=>`<button class="${f===floor?'on':''}" onclick="floor=floor==='${f}'?'':'${f}';drawFloors()">${f}</button>`).join('');
+}
+
+// 사진을 가로 800px JPEG로 줄여서 저장 용량 절감
+$('file').addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const img=new Image(), url=URL.createObjectURL(f);
+  img.onload=()=>{
+    const s=Math.min(1,800/img.width), c=document.createElement('canvas');
+    c.width=img.width*s; c.height=img.height*s;
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+    photo=c.toDataURL('image/jpeg',.7); URL.revokeObjectURL(url);
+    $('preview').src=photo; $('preview').classList.remove('hide');
+    $('photoBtn').textContent='📷 다시 찍기';
+  };
+  img.src=url;
+});
+
+function getPos(){
+  return new Promise(res=>{
+    if(!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      p=>res({lat:p.coords.latitude,lng:p.coords.longitude,acc:Math.round(p.coords.accuracy)}),
+      ()=>res(null),{enableHighAccuracy:true,timeout:8000,maximumAge:0});
+  });
+}
+
+async function save(){
+  const zone=$('zone').value.trim();
+  if(!photo && !floor && !zone) return toast('사진, 층, 구역 중 하나는 입력해주세요');
+  const pos=$('useGps').checked? await getPos() : null;
+  const list=load();
+  list.unshift({id:Date.now(),t:Date.now(),floor,zone,photo,pos,done:false});
+  if(!store(list.slice(0,MAX))) toast('저장 공간이 부족해요');
+  photo='';floor='';$('zone').value='';$('preview').classList.add('hide');$('photoBtn').textContent='📷 기둥·구역 사진 찍기';
+  drawFloors();render();toast(pos?'저장했어요 (GPS 포함)':'저장했어요');
+  window.scrollTo(0,0);
+}
+
+function ago(t){
+  const m=Math.floor((Date.now()-t)/60000);
+  if(m<1) return '방금 전';
+  if(m<60) return m+'분 전';
+  const h=Math.floor(m/60);
+  if(h<24) return h+'시간 '+(m%60)+'분 전';
+  return Math.floor(h/24)+'일 전';
+}
+function mapUrl(p){return `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
+
+function found(id){
+  const list=load().map(x=>x.id===id?{...x,done:true,photo:x.photo}:x);
+  store(list);render();toast('주차 완료! 안전 운전하세요');
+}
+function remove(id){store(load().filter(x=>x.id!==id));render()}
+function clearAll(){if(confirm('모든 기록을 삭제할까요?')){localStorage.removeItem('parking');render()}}
+
+function render(){
+  const list=load(), cur=list.find(x=>!x.done);
+  const c=$('current');
+  if(cur){
+    c.classList.remove('hide');
+    c.innerHTML=`${cur.photo?`<img class="photo" src="${cur.photo}">`:''}
+      <div class="sub">내 차는 여기 있어요 · ${ago(cur.t)}</div>
+      <div class="where">${esc([cur.floor,cur.zone].filter(Boolean).join(' ')||'위치 메모 없음')}</div>
+      ${cur.pos?`<div class="sub">GPS 정확도 약 ${cur.pos.acc}m</div>`:''}
+      <div class="row">
+        ${cur.pos?`<a href="${mapUrl(cur.pos)}" target="_blank" rel="noopener">🗺 지도로 보기</a>`:''}
+        <button onclick="found(${cur.id})">✅ 차 찾았어요</button>
+      </div>`;
+  } else c.classList.add('hide');
+
+  const past=list.filter(x=>x.done);
+  $('histBox').classList.toggle('hide',!past.length);
+  $('hist').innerHTML=past.map(x=>`<div class="hist">
+    ${x.photo?`<img src="${x.photo}">`:'<img alt="">'}
+    <div class="t">${esc([x.floor,x.zone].filter(Boolean).join(' ')||'메모 없음')}<div class="sub">${new Date(x.t).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div></div>
+    <button class="danger" style="border:0;background:none;color:#c33" onclick="remove(${x.id})">삭제</button></div>`).join('')
+    +(past.length?`<div class="row"><button class="danger" onclick="clearAll()">전체 삭제</button></div>`:'');
+}
+
+drawFloors();render();
+setInterval(render,60000);
+if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
