@@ -18,18 +18,25 @@ h1{font-size:18px;margin:4px 0 12px;color:var(--mute);font-weight:600}
 button{font:inherit;cursor:pointer}
 .hide{display:none!important}
 
-/* 주차 전: 큰 버튼 하나 */
-#idle{flex:1;display:flex;flex-direction:column;justify-content:center}
-#park{width:100%;aspect-ratio:1;max-height:62vh;border:0;border-radius:32px;background:var(--pri);color:#fff;font-size:30px;font-weight:800;box-shadow:0 10px 28px rgba(31,111,235,.35);line-height:1.4}
-#park small{display:block;font-size:15px;font-weight:500;opacity:.85;margin-top:6px}
-#park:active{transform:scale(.98)}
+/* 홈화면: 카메라 영역 */
+#idle{flex:1;display:flex;flex-direction:column;min-height:0}
+#cam{position:relative;flex:1;min-height:320px;max-height:620px;border-radius:28px;overflow:hidden;background:#0d1b33;cursor:pointer;box-shadow:0 10px 28px rgba(31,111,235,.25);-webkit-tap-highlight-color:transparent;user-select:none}
+#video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#camFallback{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#fff;background:var(--pri);font-size:26px;font-weight:800;text-align:center;padding:20px}
+#camFallback small{font-size:15px;font-weight:500;opacity:.85}
+#camHint{position:absolute;left:0;right:0;bottom:0;padding:18px 12px 20px;text-align:center;color:#fff;font-weight:700;font-size:17px;background:linear-gradient(transparent,rgba(0,0,0,.55))}
+#camHint i{display:block;width:62px;height:62px;margin:0 auto 8px;border-radius:50%;border:5px solid #fff;background:rgba(255,255,255,.25)}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none}
+#flash.go{animation:fl .35s}
+@keyframes fl{0%{opacity:.9}100%{opacity:0}}
+#cam:active #camHint i{background:#fff}
+#skip{align-self:center;margin:12px 0 4px;padding:8px 14px;border:0;background:none;color:var(--mute);font-size:14px;text-decoration:underline}
 
-/* 주차 후 */
+/* 다음화면 */
 .card{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px}
 .when{color:var(--mute);font-size:14px}
 .where{font-size:34px;font-weight:800;margin:4px 0 10px;word-break:break-all}
-.where.empty{font-size:20px;color:var(--mute);font-weight:600}
-.photo{width:100%;border-radius:14px;display:block;margin:10px 0;max-height:320px;object-fit:cover}
+.photo{width:100%;border-radius:14px;display:block;margin:10px 0;max-height:52vh;object-fit:cover}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
 .chips button{padding:9px 14px;border:1px solid var(--line);background:#fff;border-radius:20px;font-size:15px}
 .chips button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
@@ -53,29 +60,35 @@ summary{color:var(--mute);cursor:pointer;padding:6px 0}
 <div class="wrap">
   <h1>🚗 내 차 어디?</h1>
 
-  <!-- 주차 전 -->
+  <!-- 홈화면 -->
   <div id="idle">
-    <button id="park" onclick="park()">🅿️ 주차했어요<small>탭 한 번으로 저장</small></button>
+    <div id="cam" onclick="shoot()">
+      <video id="video" playsinline muted autoplay class="hide"></video>
+      <div id="camFallback"><span>📷 탭해서 사진 찍기</span><small>찍으면 바로 저장돼요</small></div>
+      <div id="camHint" class="hide"><i></i>탭하면 촬영하고 바로 저장</div>
+      <div id="flash"></div>
+    </div>
+    <button id="skip" onclick="park('')">사진 없이 저장</button>
   </div>
 
-  <!-- 주차 후 -->
+  <!-- 다음화면 -->
   <div id="parked" class="hide">
     <div class="card">
       <div class="when" id="when"></div>
-      <div class="where" id="where"></div>
+      <div class="where hide" id="where"></div>
       <img id="photo" class="photo hide" alt="">
       <div class="chips" id="floors"></div>
       <input type="text" id="zone" placeholder="구역·기둥 번호 (선택)" onchange="setZone(this.value)">
-      <input type="file" id="file" accept="image/*" capture="environment" class="hide">
       <div class="tools">
-        <button onclick="file.click()" id="photoBtn">📷 사진</button>
+        <button onclick="retake()" id="photoBtn">📷 사진</button>
         <a id="mapBtn" class="hide" target="_blank" rel="noopener">🗺 지도</a>
       </div>
     </div>
     <button id="found" onclick="found()">✅ 차 찾았어요</button>
   </div>
+  <input type="file" id="file" accept="image/*" capture="environment" class="hide">
 
-  <details id="histBox" class="hide">
+  <details id="histBox" class="hide" open>
     <summary>지난 기록</summary>
     <div id="hist"></div>
   </details>
@@ -102,12 +115,57 @@ function update(id,patch){
   render();
 }
 
-// 탭 한 번 저장: 먼저 기록하고, GPS는 나중에 채움
-function park(){
+/* ---------- 카메라 ---------- */
+let stream=null, camFailed=false;
+async function startCam(){
+  if(stream||camFailed||!navigator.mediaDevices?.getUserMedia) return;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    const v=$('video'); v.srcObject=stream; await v.play().catch(()=>{});
+    v.classList.remove('hide'); $('camHint').classList.remove('hide'); $('camFallback').classList.add('hide');
+  }catch(e){ camFailed=true; stream=null; }
+}
+function stopCam(){
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  const v=$('video'); v.srcObject=null; v.classList.add('hide');
+  $('camHint').classList.add('hide'); $('camFallback').classList.remove('hide');
+}
+function snapshot(src,w,h){
+  const s=Math.min(1,800/w), cv=document.createElement('canvas');
+  cv.width=Math.round(w*s); cv.height=Math.round(h*s);
+  cv.getContext('2d').drawImage(src,0,0,cv.width,cv.height);
+  return cv.toDataURL('image/jpeg',.7);
+}
+// 홈화면 카메라 영역 탭: 라이브 화면이 있으면 바로 촬영, 없으면 기본 카메라 앱 호출
+function shoot(){
+  const v=$('video');
+  if(stream && v.videoWidth){
+    $('flash').classList.remove('go'); void $('flash').offsetWidth; $('flash').classList.add('go');
+    park(snapshot(v,v.videoWidth,v.videoHeight));
+  } else { $('file').click() }
+}
+function retake(){
+  // 다음화면에서 다시 찍기: 기본 카메라 앱 호출
+  $('file').click();
+}
+$('file').addEventListener('change',e=>{
+  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  const img=new Image(), url=URL.createObjectURL(f);
+  img.onload=()=>{
+    const data=snapshot(img,img.width,img.height); URL.revokeObjectURL(url);
+    const c=current();
+    if(c) update(c.id,{photo:data}); else park(data);
+  };
+  img.src=url;
+});
+
+/* ---------- 저장 ---------- */
+// 저장은 즉시, GPS는 나중에 채움
+function park(photo){
   const id=Date.now();
   const list=load();
-  list.unshift({id,t:id,floor:'',zone:'',photo:'',pos:null,done:false});
-  store(list.slice(0,MAX));
+  list.unshift({id,t:id,floor:'',zone:'',photo:photo||'',pos:null,done:false});
+  if(!store(list.slice(0,MAX))) toast('저장 공간이 부족해요');
   render();
   if(navigator.geolocation){
     navigator.geolocation.getCurrentPosition(
@@ -116,25 +174,10 @@ function park(){
   }
   toast('저장했어요');
 }
-
 function setFloor(f){const c=current();if(c)update(c.id,{floor:c.floor===f?'':f})}
 function setZone(v){const c=current();if(c)update(c.id,{zone:v.trim()})}
 function found(){const c=current();if(c){update(c.id,{done:true});toast('안전 운전하세요 🚗')}}
 function remove(id){store(load().filter(x=>x.id!==id));render()}
-
-// 사진은 가로 800px JPEG로 줄여서 저장
-$('file').addEventListener('change',e=>{
-  const f=e.target.files[0], c=current(); if(!f||!c) return;
-  const img=new Image(), url=URL.createObjectURL(f);
-  img.onload=()=>{
-    const s=Math.min(1,800/img.width), cv=document.createElement('canvas');
-    cv.width=img.width*s; cv.height=img.height*s;
-    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
-    URL.revokeObjectURL(url);
-    update(c.id,{photo:cv.toDataURL('image/jpeg',.7)});
-  };
-  img.src=url; e.target.value='';
-});
 
 function ago(t){
   const m=Math.floor((Date.now()-t)/60000);
@@ -150,10 +193,10 @@ function render(){
   $('idle').classList.toggle('hide',!!c);
   $('parked').classList.toggle('hide',!c);
   if(c){
+    stopCam();
     $('when').textContent=ago(c.t);
     const txt=[c.floor,c.zone].filter(Boolean).join(' ');
-    $('where').textContent=txt||'층·사진을 남기면 더 찾기 쉬워요';
-    $('where').classList.toggle('empty',!txt);
+    $('where').textContent=txt; $('where').classList.toggle('hide',!txt);
     $('photo').classList.toggle('hide',!c.photo); if(c.photo) $('photo').src=c.photo;
     $('photoBtn').textContent=c.photo?'📷 다시 찍기':'📷 사진';
     if(document.activeElement!==$('zone')) $('zone').value=c.zone||'';
@@ -161,7 +204,8 @@ function render(){
     const m=$('mapBtn');
     if(c.pos){m.href=`https://www.google.com/maps/search/?api=1&query=${c.pos.lat},${c.pos.lng}`;m.textContent=`🗺 지도 (±${c.pos.acc}m)`;m.classList.remove('hide')}
     else m.classList.add('hide');
-  }
+  } else startCam();
+
   const past=load().filter(x=>x.done);
   $('histBox').classList.toggle('hide',!past.length);
   $('hist').innerHTML=past.map(x=>`<div class="hist">
@@ -169,6 +213,11 @@ function render(){
     <div class="t">${esc([x.floor,x.zone].filter(Boolean).join(' ')||'메모 없음')}<div class="sub">${new Date(x.t).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div></div>
     <button onclick="remove(${x.id})">삭제</button></div>`).join('');
 }
+
+// 앱이 백그라운드로 가면 카메라를 끄고, 돌아오면 다시 켬
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) stopCam(); else if(!current()) startCam();
+});
 
 render();
 setInterval(render,60000);
